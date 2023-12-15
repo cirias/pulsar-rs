@@ -683,23 +683,27 @@ impl<Exe: Executor> TopicProducer<Exe> {
         message: ProducerMessage,
     ) -> Result<impl Future<Output = Result<CommandSendReceipt, Error>>, Error> {
         loop {
-            let msg = message.clone();
-            match self.connection.sender().send(
-                self.id,
-                self.name.clone(),
-                self.message_id.get(),
-                msg,
-            ) {
-                Ok(fut) => {
-                    let fut = async move {
-                        let res = fut.await;
-                        res.map_err(|e| {
-                            error!("wait send receipt got error: {:?}", e);
-                            Error::Producer(ProducerError::Connection(e))
+            // pick up the previous sending error if it exists
+            let res = match self.connection.error() {
+                Some(err) => Err(err),
+                None => {
+                    // if not we perform the send operation
+                    let msg = message.clone();
+                    self.connection
+                        .sender()
+                        .send(self.id, self.name.clone(), self.message_id.get(), msg)
+                        .map(|fut| async move {
+                            let res = fut.await;
+                            res.map_err(|e| {
+                                error!("wait send receipt got error: {:?}", e);
+                                Error::Producer(ProducerError::Connection(e))
+                            })
                         })
-                    };
-                    return Ok(fut);
                 }
+            };
+
+            match res {
+                Ok(fut) => return Ok(fut),
                 Err(ConnectionError::Disconnected) => {}
                 Err(ConnectionError::Io(e)) => {
                     if e.kind() != std::io::ErrorKind::TimedOut {
