@@ -200,7 +200,7 @@ impl<S: Stream<Item = Result<Message, ConnectionError>>> Future for Receiver<S> 
                     msg => match msg.request_key() {
                         Some(key @ RequestKey::RequestId(_))
                         | Some(key @ RequestKey::ProducerSend { .. }) => {
-                            trace!("received this message: {:?}", msg);
+                            trace!("received this message(key = {:?})", key);
                             if let Some(resolver) = self.pending_requests.remove(&key) {
                                 // We don't care if the receiver has dropped their future
                                 let _ = resolver.send(msg);
@@ -641,7 +641,12 @@ impl<Exe: Executor> ConnectionSender<Exe> {
         F: FnOnce(Message) -> Option<R> + 'static,
     {
         let (resolver, response) = oneshot::channel();
-        trace!("sending message(key = {:?}): {:?}", key, msg);
+        trace!(
+            "sending message(key = {:?}, payload_len = {:?}, queue_len = {})",
+            key,
+            msg.payload.as_ref().map(|p| p.data.len()),
+            self.tx.len()
+        );
 
         let k = key.clone();
         let error = self.error.clone();
@@ -653,7 +658,7 @@ impl<Exe: Executor> ConnectionSender<Exe> {
                     ConnectionError::Disconnected
                 })
                 .map(move |message: Message| {
-                    trace!("received message(key = {:?}): {:?}", k, message);
+                    trace!("received message(key = {:?})", k);
                     extract_message(message, extract)
                 })?
         };
@@ -1221,6 +1226,7 @@ impl<Exe: Executor> Connection<Exe> {
         let res = executor.spawn(Box::pin(async move {
             while let Some(msg) = rx.next().await {
                 // println!("real sent msg: {:?}", msg);
+                trace!("real sending message(key = {:?})", msg.request_key());
                 if let Err(e) = sink.send(msg).await {
                     err.set(e);
                     break;
